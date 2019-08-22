@@ -1,0 +1,51 @@
+rm(list=ls())
+# setwd("~/NISM/101 Marvelous Maths/HW3_QP_to_beat_market")
+library(quantmod)
+library(quadprog)
+library(BatchGetSymbols)
+library(dplyr)
+library(stats)
+library(tidyr)
+library(Matrix)
+library(ggplot2)
+library(xlsx)
+library(treemap)
+Required_Return = seq(0.01,3.00,0.01)
+temp_data = read.csv(file = 'ind_nifty500list.csv', header = FALSE, sep = ",")$V3 # Nifty 500 list in NSE documentation(s) in this page (https://www.nseindia.com/products/content/equities/indices/nifty_500.htm), .csv documentation, link: https://www.nseindia.com/content/indices/ind_nifty500list.csv
+Tickers = paste0(sort(as.character(temp_data)[2:length(temp_data)]),'.NS',sep='')
+Full_Data = BatchGetSymbols(tickers = Tickers, first.date = "2011-01-01", last.date = "2018-01-01", freq.data = 'yearly', thresh.bad.data = 0.75)
+Number_Of_Stocks_Selected = sum(Full_Data$df.control$threshold.decision=='KEEP')
+Full_Data_Wide <- reshape.wide(Full_Data$df.tickers) 
+Returns_Data_Wide_No_NA = as.data.frame(Full_Data_Wide$ret.adjusted.prices) %>% drop_na()
+Covariance_Matrix = as.matrix(cbind(cov(Returns_Data_Wide_No_NA[,2:dim(Returns_Data_Wide_No_NA)[2]])))
+Covariance_Matrix = as.matrix(nearPD(Covariance_Matrix)$mat)
+dvec_LS = rep(0,each=dim(Covariance_Matrix)[1])
+Amat_LS = t(as.matrix(rbind(rep(1,each=dim(Returns_Data_Wide_No_NA)[2]-1),as.numeric(colMeans(Returns_Data_Wide_No_NA[,2:dim(Returns_Data_Wide_No_NA)[2]])))))
+Efficient_Frontier = data.frame(Risk = double(),Returns = double(), stringsAsFactors = FALSE)
+All_Returns_Weights = list()
+Return_And_Weights_WorkBook = createWorkbook()
+Long_And_Short_Sheet  = createSheet(Return_And_Weights_WorkBook, sheetName="Long_&_Short")
+Outfilename = 'QP_NIFTY500_Weights.xlsx'
+Starting_Column_Number = 1
+Weight_Index = colnames(Returns_Data_Wide_No_NA)
+Weight_Index = Weight_Index[2:length(Weight_Index)]
+Required_Return = seq(0.01,3.00,0.01)
+for (i in seq_along(Required_Return))
+{
+  bvec_LS = c(1,Required_Return[i])
+  Q = solve.QP(Covariance_Matrix,dvec_LS,Amat_LS,bvec_LS)
+  if (sum(Q$solution) > 1){next}
+  TEMP_DF = data.frame(Q$value, Required_Return[i], stringsAsFactors = FALSE)
+  names(TEMP_DF) = c("Risk","Returns")
+  Weights_DF = data.frame(Weight_Index, Q$solution, stringsAsFactors = FALSE)
+  names(Weights_DF) = c("Name",paste0(Required_Return[i]*100, "% Ret Wt", sep=''))
+  addDataFrame(Weights_DF, Long_And_Short_Sheet, startRow=1, startColumn=Starting_Column_Number)
+  Starting_Column_Number = Starting_Column_Number + 4
+  Efficient_Frontier = rbind(Efficient_Frontier,TEMP_DF)
+  All_Returns_Weights = append(All_Returns_Weights,list(Q$solution))
+}
+saveWorkbook(Return_And_Weights_WorkBook, Outfilename)
+png(filename=paste0("Portfolio Efficient Frontier Curve LS",".png",sep=''), width = 1280, height = 720)
+plot(Efficient_Frontier, type = 'o', main="Portfolio Efficient Frontier Curve", cex.axis = 1, cex.lab = 1.5, cex.main = 2.5)
+dev.off()
+rm(list=ls()) #treemap(Weights_DF, index = 'Name', vSize = '81% Ret Wt') -> When no negative values

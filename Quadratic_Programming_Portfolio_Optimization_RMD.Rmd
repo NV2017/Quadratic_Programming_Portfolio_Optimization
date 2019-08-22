@@ -1,0 +1,185 @@
+---
+title: "Quadratic_Programming_Portfolio_Optimization"
+author: "Arunabha Sarkar"
+date: "22 August 2019"
+output: html_document
+---
+
+### **Quadratic Programming Portfolio Optimization**
+
+Quadratic Portfolio Optimization is a natural extensions of CAPM model (Capital Asset Pricing Model). While CAPM gives an estimate of goodness of individual assets, it doesn't directly help build a portfolio. Using Quadratic Programming Portfolio Optimization, it becomes possible to construct for a given desired return, the best portfolio (as evaluated by CAPM measure of risk: historical standard deviation). 
+
+<br>
+
+Mathematically we can define the required rate of return from n-assets as:
+
+<br>
+
+### $\Sigma$~i=1~^n^ w~i~ E(R~i~) :: a fixed user defined value (e.g. 20% per year) **[Equation 1]**
+
+<br>
+
+For the same n-asset portfolio, we can define posrtfolio risk as the historical standard deviation as follows:
+
+<br>
+
+### Risk :: $\Sigma$~i=1~^n^ w~i~^2^ $\sigma$~i~^2^ + 2 $\Sigma$~i=1~^n^ $\Sigma$~j=1~^n^ w~i~w~j~ $\sigma$~ij~, i not equal to j **[Equation 2]**
+
+<br>
+
+In Quadratic Programming Portfolio Optimization, we minimize the risk (Equation 2) while maintaining the required returns (Equation 1). The weights of the equation provide constraints for the optimization. 
+
+<br>
+
+The process can be stated mathematically as:
+
+<br>
+
+minimize quadratic function with ( 1/2 x^T^ Q x + c^T^ ), with linear contraints:
+
+<br>
+
+Ax = b, ['b' is the desired returns]
+<br>
+x^T^ Q~i~ x + d~i~ <= b~i~, [Standard deviation risk minimization]
+<br>
+x >= 0 [no weights less then zero, thus no shorting]
+
+<br>
+
+Our choice of portfolio is the entire NIFTY 500 list, with no shorting allowed
+
+<br>
+
+In this study, we do the above described optimization for a wide range of required returns to plot the Efficient Frontier Curve as well.
+
+<br>
+
+We start with clearing hte workspace and loading the necessary required packages.
+
+<br>
+
+```{r setup, include=T, message=FALSE, warning=FALSE}
+rm(list=ls())
+setwd("~/NISM/101 Marvelous Maths/HW3_QP_to_beat_market")
+knitr::opts_chunk$set(echo = TRUE)
+libraries_required = c('quantmod', 'quadprog', 'BatchGetSymbols', 'dplyr', 'stats', 'tidyr', 'Matrix', 'tidyr', 'xlsx')
+
+for(i in seq(libraries_required))
+{
+  if(!(libraries_required[i] %in% rownames(installed.packages())))
+  {
+    try(expr = install.packages('libraries_required[i]'), silent = T)
+  }
+  try(expr = library(libraries_required[i], character.only = T), silent = T)
+}
+options("getSymbols.warning4.0"=FALSE)
+options(warn=-1)
+```
+
+<br>
+
+Next we load read all the tickers of NIFTY 500 companies and gathers their stock time series data using 'BatchGetSymbols' function.
+
+<br>
+
+```{r children_1, echo=TRUE}
+
+Required_Return = seq(0.01,3.00,0.01)
+temp_data = read.csv(file = 'ind_nifty500list.csv', header = FALSE, sep = ",")$V3 # Nifty 500 list in NSE documentation(s) in this page (https://www.nseindia.com/products/content/equities/indices/nifty_500.htm), .csv documentation, link: https://www.nseindia.com/content/indices/ind_nifty500list.csv
+Tickers = paste0(sort(as.character(temp_data)[2:length(temp_data)]),'.NS',sep='')
+Full_Data = BatchGetSymbols(tickers = Tickers, first.date = "2011-01-01", last.date = "2018-01-01", freq.data = 'yearly', thresh.bad.data = 0.75)
+
+```
+
+<br>
+
+Next we prep data for the QP for getting the entire Efficient Frontier Curve. We also make contructs to capture the output.
+
+<br>
+
+```{r children_2, echo=TRUE}
+
+Number_Of_Stocks_Selected = sum(Full_Data$df.control$threshold.decision=='KEEP')
+Full_Data_Wide <- reshape.wide(Full_Data$df.tickers) 
+Returns_Data_Wide_No_NA = as.data.frame(Full_Data_Wide$ret.adjusted.prices) %>% drop_na()
+Covariance_Matrix = as.matrix(cbind(cov(Returns_Data_Wide_No_NA[,2:dim(Returns_Data_Wide_No_NA)[2]])))
+Covariance_Matrix = as.matrix(nearPD(Covariance_Matrix)$mat)
+dvec_LS = rep(0,each=dim(Covariance_Matrix)[1])
+Amat_LS = t(as.matrix(rbind(rep(1,each=dim(Returns_Data_Wide_No_NA)[2]-1),as.numeric(colMeans(Returns_Data_Wide_No_NA[,2:dim(Returns_Data_Wide_No_NA)[2]])))))
+Efficient_Frontier = data.frame(Risk = double(),Returns = double(), stringsAsFactors = FALSE)
+All_Returns_Weights = list()
+Return_And_Weights_WorkBook = createWorkbook()
+Long_And_Short_Sheet  = createSheet(Return_And_Weights_WorkBook, sheetName="Long_&_Short")
+Outfilename = 'QP_NIFTY500_Weights.xlsx'
+Starting_Column_Number = 1
+Weight_Index = colnames(Returns_Data_Wide_No_NA)
+Weight_Index = Weight_Index[2:length(Weight_Index)]
+Required_Return = seq(0.01,3.00,0.01)
+
+```
+
+
+<br>
+
+Next to arrive at the Efficient Frontier curve, we use a for loop to run over the various returns and store the output.
+
+<br>
+
+```{r children_3, echo=TRUE}
+
+for (i in seq_along(Required_Return))
+{
+  bvec_LS = c(1,Required_Return[i])
+  Q = solve.QP(Covariance_Matrix,dvec_LS,Amat_LS,bvec_LS)
+  if (sum(Q$solution) > 1){next}
+  TEMP_DF = data.frame(Q$value, Required_Return[i], stringsAsFactors = FALSE)
+  names(TEMP_DF) = c("Risk","Returns")
+  Weights_DF = data.frame(Weight_Index, Q$solution, stringsAsFactors = FALSE)
+  names(Weights_DF) = c("Name",paste0(Required_Return[i]*100, "% Ret Wt", sep=''))
+  addDataFrame(Weights_DF, Long_And_Short_Sheet, startRow=1, startColumn=Starting_Column_Number)
+  Starting_Column_Number = Starting_Column_Number + 4
+  Efficient_Frontier = rbind(Efficient_Frontier,TEMP_DF)
+  All_Returns_Weights = append(All_Returns_Weights,list(Q$solution))
+}
+
+```
+
+<br>
+
+Now we save the output of various returns in a .csv file. We also plot the Efficient frontier.
+
+<br>
+
+```{r children_4, echo=TRUE}
+
+saveWorkbook(Return_And_Weights_WorkBook, Outfilename)
+
+plot(Efficient_Frontier, type = 'o', main="Portfolio Efficient Frontier Curve", cex.axis = 1, cex.lab = 1.5, cex.main = 2.5)
+
+png(filename=paste0("Portfolio Efficient Frontier Curve LS ",gsub('-','_',strsplit(as.character(Sys.time()),split=" ")[[1]][1]),".png",sep=''), width = 1280, height = 720)
+plot(Efficient_Frontier, type = 'o', main="Portfolio Efficient Frontier Curve", cex.axis = 1, cex.lab = 1.5, cex.main = 2.5)
+dev.off()
+
+```
+
+<br>
+
+Our excel sheet with data from the same looks like this, with instructive :
+
+<br>
+
+```{r img1, echo=FALSE, fig.cap="Output of portfolio weights for various returns", out.width = '100%'}
+knitr::include_graphics("Slide11.png")
+```
+
+
+<br>
+
+Lastly we close this report by clearing the workspace
+
+<br>
+
+```{r children_5, echo=TRUE}
+rm(list=ls())
+```
